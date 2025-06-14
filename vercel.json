@@ -2,25 +2,18 @@
   "version": 2,
   "builds": [
     {
-      "src": "app.py",
-      "use": "@vercel/python@2.0.0"
+      "src": "app.js",
+      "use": "@vercel/node@3.0.17"
     }
   ],
   "routes": [
     {
-      "src": "/socket.io/",
-      "dest": "app.py",
-      "headers": {
-        "Access-Control-Allow-Origin": "*"
-      }
-    },
-    {
       "src": "/(.*)",
-      "dest": "app.py"
+      "dest": "app.js"
     }
   ],
   "env": {
-    "FLASK_SECRET_KEY": "FLASK_SECRET_KEY",
-    "FIREBASE_ADMIN_CREDENTIALS_JSON": "FIREBASE_ADMIN_CREDENTIALS_JSON"
+    "FIREBASE_ADMIN_CREDENTIALS_JSON": "FIREBASE_ADMIN_CREDENTIALS_JSON",
+    "VERCEL_URL": "@vercel_url"
   }
 }
