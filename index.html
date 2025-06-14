@@ -441,9 +441,8 @@
     
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, onAuthStateChanged, signOut, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove, deleteDoc, collection, query, where, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
 
         // Your Firebase configuration (ensure this matches your project settings)
@@ -1272,17 +1271,28 @@
                 }
             });
 
+            // Specific controls for dropdown and modal buttons
             if (!enable) {
                 openOptionsDropdownButton.classList.add('opacity-70', 'cursor-not-allowed');
+                createJamSessionDropdownBtn.disabled = true;
                 createJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
-                joinJamSessionDropdownBtn.classList.remove('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
+                joinJamSessionDropdownBtn.disabled = true;
+                joinJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
+                createJamButton.disabled = true; // Button inside create modal
+                joinJamButton.disabled = true; // Button inside join modal
+
                 if (currentJamId) { 
                     joinJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
+                    joinJamButton.disabled = true;
                 }
             } else {
                 openOptionsDropdownButton.classList.remove('opacity-70', 'cursor-not-allowed');
+                createJamSessionDropdownBtn.disabled = false;
                 createJamSessionDropdownBtn.classList.remove('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
+                joinJamSessionDropdownBtn.disabled = false;
                 joinJamSessionDropdownBtn.classList.remove('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
+                createJamButton.disabled = false; // Button inside create modal
+                joinJamButton.disabled = false; // Button inside join modal
             }
             
             if (!enable) {
@@ -1524,35 +1534,6 @@
             openJoinJamModal(); // Open without pre-filled ID, let user type
             optionsDropdown.classList.add('hidden'); 
         });
-
-        // Removed the performLogout function as it's no longer needed for UI interaction
-        /*
-        async function performLogout() {
-            try {
-                await signOut(auth); 
-                const res = await fetch(`${FLASK_BACKEND_URL}/logout`, { method: 'POST' }); 
-                if (res.ok) {
-                    showMessage("Logged out successfully! Redirecting to login...", 2000);
-                    setTimeout(() => {
-                        window.location.href = "/login"; 
-                    }, 1000);
-                } else {
-                    const errorData = await res.json();
-                    showMessage(`Logout failed on server: ${errorData.error || 'Unknown error'}`, 3000);
-                }
-            } catch (error) {
-                console.error("Error during logout:", error);
-                showMessage(`Error logging out: ${error.message}`, 3000);
-            } finally {
-                optionsDropdown.classList.add('hidden'); 
-            }
-        }
-        */
-
-        // Removed event listeners for the logout buttons
-        // dropdownLogoutButton.addEventListener('click', performLogout);
-        // topLogoutButton.addEventListener('click', performLogout);
-
 
         createJamButton.addEventListener('click', async () => {
             if (!userId) {
@@ -1862,7 +1843,7 @@
                     showMessage("Please enter your nickname to join the jam session from the link.", 5000);
                 }
             } else {
-                showMessage("Welcome! Use 'Add Songs (MP3)' or the 3 dots menu to begin.", 3000); 
+                showMessage("Welcome! Use 'Add Songs' or the 3 dots menu to begin.", 3000); 
                 trackTitle.textContent = "No song loaded";
                 artistName.textContent = "";
                 albumArt.src = "https://placehold.co/128x128/CCCCCC/FFFFFF?text=No+Track";
@@ -1877,14 +1858,15 @@
             // which might happen if __firebase_config is not properly provided in the environment.
             if (Object.keys(firebaseConfig).length === 0) {
                 console.error("Firebase config is empty. Firebase features will not work.");
-                showMessage("Firebase configuration missing. Jam features may not work.", 6000);
+                showMessage("Firebase configuration missing. Jam features may not work. Please ensure it's configured in your environment.", 6000);
                 // Disable Firebase-dependent buttons
                 createJamSessionDropdownBtn.disabled = true;
                 createJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
                 joinJamSessionDropdownBtn.disabled = true;
                 joinJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
-                if (document.getElementById('create-jam-button')) document.getElementById('create-jam-button').disabled = true;
-                if (document.getElementById('join-jam-button')) document.getElementById('join-jam-button').disabled = true;
+                // Also disable buttons within the modals
+                if (createJamButton) createJamButton.disabled = true;
+                if (joinJamButton) joinJamButton.disabled = true;
 
                 // Proceed with UI setup for non-jam features
                 await handleInitialLoadAndJamJoin();
@@ -1925,12 +1907,13 @@
 
                         showMessage(`Welcome, ${user.email || currentNickname}!`, 3000); // Display email if available
 
+                        // Enable Firebase-dependent buttons
                         createJamSessionDropdownBtn.disabled = false;
                         createJamSessionDropdownBtn.classList.remove('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
                         joinJamSessionDropdownBtn.disabled = false;
                         joinJamSessionDropdownBtn.classList.remove('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
-                        if (document.getElementById('create-jam-button')) document.getElementById('create-jam-button').disabled = false;
-                        if (document.getElementById('join-jam-button')) document.getElementById('join-jam-button').disabled = false;
+                        if (createJamButton) createJamButton.disabled = false;
+                        if (joinJamButton) joinJamButton.disabled = false;
                         
                         // Attempt to pre-fill nickname input fields if a nickname is saved
                         const savedNickname = localStorage.getItem('tunejam_nickname');
@@ -1947,12 +1930,13 @@
                         socket.disconnect();
                         socket.connect();
 
+                        // Disable Firebase-dependent buttons
                         createJamSessionDropdownBtn.disabled = true;
                         createJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
                         joinJamSessionDropdownBtn.disabled = true;
                         joinJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
-                        if (document.getElementById('create-jam-button')) document.getElementById('create-jam-button').disabled = true;
-                        if (document.getElementById('join-jam-button')) document.getElementById('join-jam-button').disabled = true;
+                        if (createJamButton) createJamButton.disabled = true;
+                        if (joinJamButton) joinJamButton.disabled = true;
 
                         currentJamId = null;
                         isHost = false;
@@ -1977,12 +1961,13 @@
                 showMessage(`Firebase initialization failed: ${error.message}. Jam features may not work.`, 6000);
                 userId = 'anonymous_error_firebase_' + Date.now(); 
                 
+                // Ensure buttons are disabled if Firebase initialization completely fails
                 createJamSessionDropdownBtn.disabled = true;
                 createJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
                 joinJamSessionDropdownBtn.disabled = true;
                 joinJamSessionDropdownBtn.classList.add('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
-                if (document.getElementById('create-jam-button')) document.getElementById('create-jam-button').disabled = true;
-                if (document.getElementById('join-jam-button')) document.getElementById('join-jam-button').disabled = true;
+                if (createJamButton) createJamButton.disabled = true;
+                if (joinJamButton) joinJamButton.disabled = true;
 
                 await handleInitialLoadAndJamJoin(); 
             }
