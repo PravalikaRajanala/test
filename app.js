@@ -72,6 +72,19 @@ const activeJamSessions = {};
 // from the root directory of your project.
 app.use(express.static(path.join(__dirname)));
 
+// Basic root route for testing if Express is working
+app.get('/', (req, res) => {
+    // If express.static already served index.html, this route won't be hit for /.
+    // This serves as a fallback or explicit handler if needed for the root path.
+    res.sendFile(path.join(__dirname, 'index.html'), (err) => {
+        if (err) {
+            console.error("Error serving index.html from root route:", err);
+            // Fallback for when index.html might not be directly found by sendFile
+            res.status(404).send("<html><body><h1>404 Not Found</h1><p>The main page could not be loaded.</p></body></html>");
+        }
+    });
+});
+
 // Load the hosted songs manifest once on startup for search functionality
 let hostedSongsManifest = [];
 const hostedSongsManifestPath = path.join(__dirname, 'hosted_songs_manifest.json');
