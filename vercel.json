@@ -16,8 +16,8 @@
     { "src": "/(.*)", "dest": "app.js" }
   ],
   "env": {
-    "FIREBASE_ADMIN_CREDENTIALS_JSON": "@firebase_admin_credentials_json",
-    "VERCEL_URL": "@vercel_url",
+    "FIREBASE_ADMIN_CREDENTIALS_JSON": "firebase_admin_credentials_json",
+    "VERCEL_URL": "vercel_url",
     "APP_ID": "tunejam-app"
   }
 }
