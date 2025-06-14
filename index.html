@@ -244,10 +244,7 @@
 </head>
 <body class="bg-gradient-to-br from-indigo-50 to-purple-100 min-h-screen flex justify-center items-center p-4 relative">
 
-    <!-- New Logout Button at the top-right (absolute positioning) -->
-    <button id="top-logout-button" class="absolute top-4 right-4 px-4 py-2 bg-red-500 text-white rounded-lg shadow hover:bg-red-600 transition-colors duration-200 text-sm">
-        <i class="fas fa-sign-out-alt mr-2"></i>Logout
-    </button>
+   <!-- Removed: New Logout Button at the top-right -->
 
     <div class="audio-player-card bg-white shadow-xl rounded-2xl p-6 md:p-8 w-full max-w-sm border border-gray-100">
         <h2 class="text-2xl md:text-3xl font-extrabold text-center text-gray-800 mb-6 tracking-tight">
@@ -331,9 +328,6 @@
                     <!-- Disabled by default, enabled on successful Firebase auth -->
                     <button id="join-jam-session-dropdown-btn" class="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 opacity-70 cursor-not-allowed pointer-events-none" disabled>
                         <i class="fas fa-door-open mr-2"></i>Join Jam Session
-                    </button>
-                    <button id="dropdown-logout-button" class="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                        <i class="fas fa-sign-out-alt mr-2"></i>Logout
                     </button>
                 </div>
             </div>
@@ -516,8 +510,8 @@
         const optionsDropdown = document.getElementById('options-dropdown'); // Dropdown menu
         const createJamSessionDropdownBtn = document.getElementById('create-jam-session-dropdown-btn'); // "Create Jam Session" in dropdown
         const joinJamSessionDropdownBtn = document.getElementById('join-jam-session-dropdown-btn'); // "Join Jam Session" in dropdown
-        const dropdownLogoutButton = document.getElementById('dropdown-logout-button'); // Original logout button in dropdown
-        const topLogoutButton = document.getElementById('top-logout-button'); // NEW: Prominent logout button
+        // const dropdownLogoutButton = document.getElementById('dropdown-logout-button'); // Removed: Original logout button in dropdown
+        // const topLogoutButton = document.getElementById('top-logout-button'); // Removed: Prominent logout button
 
         // Modals
         const hostedMp3SearchModal = document.getElementById('hosted-mp3-search-modal'); // NEW: Dedicated for MP3 search
@@ -622,7 +616,7 @@
                 albumArt.src = "https://placehold.co/128x128/CCCCCC/FFFFFF?text=Error";
             };
 
-            albumArt.classList.remove('hidden'); // Show album art by default
+            albumArt.classList.remove('hidden'); 
             
             // Pause HTML audio player (if currently playing)
             audioPlayer.pause();
@@ -1113,6 +1107,12 @@
             jamNameInput.value = '';
             shareLinkContainer.classList.add('hidden'); // Hide link until created
             jamShareLinkInput.value = '';
+
+            // Pre-fill nickname in create modal
+            const savedNickname = localStorage.getItem('tunejam_nickname');
+            if (savedNickname) {
+                nicknameInputCreate.value = savedNickname;
+            }
         }
 
         function closeCreateJamModal() {
@@ -1124,7 +1124,14 @@
             console.log(`Opening Join Jam Modal for ID: ${jamIdToJoin}`);
             joinJamModal.classList.remove('hidden');
             joinJamNameDisplay.textContent = jamNamePlaceholder;
-            nicknameInputJoin.value = 'Anonymous Listener'; // Default nickname
+            
+            // Pre-fill nickname in join modal
+            const savedNickname = localStorage.getItem('tunejam_nickname');
+            if (savedNickname) {
+                nicknameInputJoin.value = savedNickname;
+            } else {
+                nicknameInputJoin.value = 'Anonymous Listener'; // Default nickname if none saved
+            }
 
             if (jamIdToJoin) {
                 joinJamIdInput.value = jamIdToJoin; // Pre-fill the ID if provided
@@ -1518,6 +1525,8 @@
             optionsDropdown.classList.add('hidden'); 
         });
 
+        // Removed the performLogout function as it's no longer needed for UI interaction
+        /*
         async function performLogout() {
             try {
                 await signOut(auth); 
@@ -1538,9 +1547,11 @@
                 optionsDropdown.classList.add('hidden'); 
             }
         }
+        */
 
-        dropdownLogoutButton.addEventListener('click', performLogout);
-        topLogoutButton.addEventListener('click', performLogout);
+        // Removed event listeners for the logout buttons
+        // dropdownLogoutButton.addEventListener('click', performLogout);
+        // topLogoutButton.addEventListener('click', performLogout);
 
 
         createJamButton.addEventListener('click', async () => {
@@ -1556,30 +1567,17 @@
             }
             myNickname = nickname;
             
+            // Save nickname to localStorage
+            localStorage.setItem('tunejam_nickname', myNickname);
+
             socket.emit('create_session', { userId: userId, jam_name: jamName, nickname: nickname });
         });
 
         copyShareLinkButton.addEventListener('click', () => {
             const link = jamShareLinkInput.value;
             if (link) {
-                navigator.clipboard.writeText(link).then(() => {
-                    showMessage("Link copied to clipboard!", 2000);
-                }).catch(err => {
-                    console.error('Failed to copy text: ', err);
-                    // Fallback for older browsers or if clipboard API fails in iframe (though it should work now)
-                    const textArea = document.createElement("textarea");
-                    textArea.value = link;
-                    document.body.appendChild(textArea);
-                    textArea.select();
-                    try {
-                        document.execCommand('copy');
-                        showMessage("Link copied to clipboard (fallback)!", 2000);
-                    } catch (e) {
-                        showMessage("Failed to copy link. Please copy manually.", 3000);
-                    } finally {
-                        document.body.removeChild(textArea);
-                    }
-                });
+                document.execCommand('copy'); // Using execCommand for better iframe compatibility
+                showMessage("Link copied to clipboard!", 2000);
             }
         });
 
@@ -1601,6 +1599,9 @@
             }
             myNickname = nickname;
             
+            // Save nickname to localStorage
+            localStorage.setItem('tunejam_nickname', myNickname);
+
             socket.emit('join_session', { userId: userId, jam_id: jamId, nickname: nickname });
             closeJoinJamModal();
         });
@@ -1755,6 +1756,8 @@
             enableHostControls(true); 
             renderPlaylist(); 
             closeCreateJamModal(); 
+            // Important: Update the URL in the browser's history to include the jam ID
+            window.history.pushState({ jam_id: currentJamId }, '', `/?jam_id=${currentJamId}`);
 
             shareLinkContainer.classList.remove('hidden');
             jamShareLinkInput.value = data.shareable_link;
@@ -1787,6 +1790,9 @@
             }
             renderPlaylist(); 
             closeJoinJamModal(); 
+            // Important: Update the URL in the browser's history to include the jam ID
+            window.history.pushState({ jam_id: currentJamId }, '', `/?jam_id=${currentJamId}`);
+
 
             subscribeToJamSessionUpdates(currentJamId);
         });
@@ -1842,7 +1848,19 @@
             const urlParams = new URLSearchParams(window.location.search);
             const urlJamId = urlParams.get('jam_id');
             if (urlJamId) {
+                // If a jam_id is in the URL, try to auto-join the jam
+                // We'll pre-fill the join modal and auto-click if nickname is saved
                 await openJoinJamModal(urlJamId, `Session ${urlJamId}`);
+                // If the user has a saved nickname, automatically attempt to join
+                const savedNickname = localStorage.getItem('tunejam_nickname');
+                if (savedNickname) {
+                    nicknameInputJoin.value = savedNickname;
+                    // Auto-click join button if we have an ID and a nickname
+                    joinJamButton.click();
+                } else {
+                    // Prompt user to enter nickname if not saved
+                    showMessage("Please enter your nickname to join the jam session from the link.", 5000);
+                }
             } else {
                 showMessage("Welcome! Use 'Add Songs (MP3)' or the 3 dots menu to begin.", 3000); 
                 trackTitle.textContent = "No song loaded";
@@ -1900,7 +1918,12 @@
                         socket.io.opts.query = { userId: userId };
                         socket.disconnect();
                         socket.connect();
-                        showMessage(`Welcome, ${user.email || 'Guest User'}!`, 3000); // Display email if available
+                        
+                        // Save nickname to localStorage on successful auth
+                        const currentNickname = nicknameInputCreate.value.trim() || nicknameInputJoin.value.trim() || 'Guest';
+                        localStorage.setItem('tunejam_nickname', currentNickname);
+
+                        showMessage(`Welcome, ${user.email || currentNickname}!`, 3000); // Display email if available
 
                         createJamSessionDropdownBtn.disabled = false;
                         createJamSessionDropdownBtn.classList.remove('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
@@ -1908,6 +1931,13 @@
                         joinJamSessionDropdownBtn.classList.remove('opacity-70', 'cursor-not-allowed', 'pointer-events-none');
                         if (document.getElementById('create-jam-button')) document.getElementById('create-jam-button').disabled = false;
                         if (document.getElementById('join-jam-button')) document.getElementById('join-jam-button').disabled = false;
+                        
+                        // Attempt to pre-fill nickname input fields if a nickname is saved
+                        const savedNickname = localStorage.getItem('tunejam_nickname');
+                        if (savedNickname) {
+                            nicknameInputCreate.value = savedNickname;
+                            nicknameInputJoin.value = savedNickname;
+                        }
 
                         await handleInitialLoadAndJamJoin();
                     } else {
