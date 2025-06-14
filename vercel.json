@@ -6,12 +6,6 @@
       "use": "@vercel/python@2.0.0"
     }
   ],
-  "functions": {
-    "app.py": {
-      "runtime": "python3.10",
-      "maxDuration": 300
-    }
-  },
   "routes": [
     {
       "src": "/socket.io/",
