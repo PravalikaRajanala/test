@@ -24,22 +24,24 @@ const firebaseAdminCredentials = process.env.FIREBASE_ADMIN_CREDENTIALS_JSON;
 
 if (!firebaseAdminCredentials) {
     console.error("FIREBASE_ADMIN_CREDENTIALS_JSON environment variable is not set. Firebase Admin SDK will not initialize.");
-    process.exit(1); // Exit if critical credential is missing
+    // In Vercel, this error will be visible in the deployment logs.
+    // For local development, you'd want to handle this more gracefully or exit.
+    // For deployment, Vercel might just show a 500 error if the app crashes on startup.
+} else {
+    try {
+        const serviceAccount = JSON.parse(firebaseAdminCredentials);
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log("Firebase Admin SDK initialized successfully.");
+    } catch (e) {
+        console.error("Error parsing Firebase Admin credentials or initializing Firebase Admin SDK:", e);
+        // This is a critical error, likely leading to app crash.
+    }
 }
 
-try {
-    const serviceAccount = JSON.parse(firebaseAdminCredentials);
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
-    console.log("Firebase Admin SDK initialized successfully.");
-} catch (e) {
-    console.error("Error parsing Firebase Admin credentials or initializing Firebase Admin SDK:", e);
-    process.exit(1); // Exit if initialization fails
-}
-
-const db = admin.firestore(); // Get Firestore instance
-const auth = admin.auth(); // Get Auth instance
+const db = firebaseAdminCredentials ? admin.firestore() : null; // Get Firestore instance, only if Firebase initialized
+const auth = firebaseAdminCredentials ? admin.auth() : null; // Get Auth instance, only if Firebase initialized
 
 // --- Express App Setup ---
 const app = express();
@@ -64,7 +66,6 @@ const io = new Server(server, {
         credentials: true,
     },
     // Allows Socket.IO to handle longer polling requests before timeout
-    // This can be beneficial in serverless environments.
     pingTimeout: 60000, 
 });
 
@@ -73,24 +74,23 @@ const io = new Server(server, {
 const activeJamSessions = {}; // Stores basic info, primarily for host_sid lookup: {jam_id: {host_sid: '...', participants: {sid: nickname}}}
 
 // --- Serve Static Files ---
-// Serve the main index.html file
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-// Serve the hosted songs manifest
-app.get('/hosted_songs_manifest.json', (req, res) => {
-    res.sendFile(path.join(__dirname, 'hosted_songs_manifest.json'));
-});
+// This line is crucial for serving all your frontend assets (index.html, manifest.json, css, js, icons etc.)
+// from the root directory. It should be placed BEFORE any specific API routes or the root route,
+// so that Express serves static files first if they match.
+app.use(express.static(path.join(__dirname)));
 
 // Load the hosted songs manifest once on startup for search functionality
 let hostedSongsManifest = [];
+const hostedSongsManifestPath = path.join(__dirname, 'hosted_songs_manifest.json');
 try {
-    hostedSongsManifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'hosted_songs_manifest.json'), 'utf8'));
-    console.log(`Loaded ${hostedSongsManifest.length} songs from hosted_songs_manifest.json`);
+    if (fs.existsSync(hostedSongsManifestPath)) {
+        hostedSongsManifest = JSON.parse(fs.readFileSync(hostedSongsManifestPath, 'utf8'));
+        console.log(`Loaded ${hostedSongsManifest.length} songs from hosted_songs_manifest.json`);
+    } else {
+        console.warn("hosted_songs_manifest.json not found at:", hostedSongsManifestPath);
+    }
 } catch (error) {
     console.error("Error loading hosted_songs_manifest.json:", error);
-    // Continue even if manifest fails to load, but search will be empty.
 }
 
 // --- API Endpoints ---
@@ -113,9 +113,6 @@ app.get('/search_hosted_mp3s', (req, res) => {
 // is primary. This server-side part might be for clearing server-set cookies.
 app.post('/logout', (req, res) => {
     console.log("Logout endpoint hit. Clearing session cookie.");
-    // For Vercel, this is often handled by the client-side Firebase Auth.
-    // If you're using server-side sessions, you'd invalidate them here.
-    // Assuming minimal server-side session, just confirm.
     res.status(200).json({ message: "Logged out successfully (server-side acknowledged)." });
 });
 
@@ -128,6 +125,10 @@ function generateShortUniqueId() {
 
 // Helper to get jam session data from Firestore
 async function getJamSessionFromFirestore(jamId) {
+    if (!db) {
+        console.error("Firestore DB not initialized. Cannot fetch jam session.");
+        return null;
+    }
     try {
         const docRef = db.collection('jam_sessions').doc(jamId);
         const doc = await docRef.get();
@@ -143,6 +144,10 @@ async function getJamSessionFromFirestore(jamId) {
 
 // Helper to update jam session data in Firestore
 async function updateJamSessionInFirestore(jamId, data) {
+    if (!db) {
+        console.error("Firestore DB not initialized. Cannot update jam session.");
+        return;
+    }
     try {
         const docRef = db.collection('jam_sessions').doc(jamId);
         await docRef.set(data, { merge: true }); // Merge updates existing fields
@@ -169,6 +174,11 @@ io.on('connection', (socket) => {
 
     // Handle session creation
     socket.on('create_session', async (data) => {
+        if (!db) {
+            socket.emit('join_failed', { message: "Server not configured for Firebase. Cannot create jam." });
+            return;
+        }
+
         const { jam_name, nickname } = data;
         let jamId = generateShortUniqueId();
 
@@ -201,7 +211,8 @@ io.on('connection', (socket) => {
             socket.join(jamId); // Host joins the Socket.IO room
             activeJamSessions[jamId] = { host_sid: socket.id, participants: { [socket.id]: nickname } }; // Update in-memory for quick lookup
 
-            const shareableLink = `${process.env.VERCEL_URL || `http://localhost:${PORT}`}/?jam_id=${jamId}`;
+            // VERCEL_URL is provided by Vercel for production deployments. For local, use localhost.
+            const shareableLink = `${process.env.VERCEL_URL || `http://localhost:${process.env.PORT || 3000}`}/?jam_id=${jamId}`;
 
             socket.emit('session_created', {
                 jam_id: jamId,
@@ -220,6 +231,11 @@ io.on('connection', (socket) => {
 
     // Handle joining an existing session
     socket.on('join_session', async (data) => {
+        if (!db) {
+            socket.emit('join_failed', { message: "Server not configured for Firebase. Cannot join jam." });
+            return;
+        }
+
         const { jam_id, nickname } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
 
@@ -233,7 +249,12 @@ io.on('connection', (socket) => {
         await updateJamSessionInFirestore(jam_id, { participants: updatedParticipants });
 
         socket.join(jam_id); // User joins the Socket.IO room
-        activeJamSessions[jam_id].participants = updatedParticipants; // Update in-memory
+        // Update in-memory if this jam_id is tracked, else create entry (less critical for non-hosts)
+        if (!activeJamSessions[jam_id]) {
+             activeJamSessions[jam_id] = { host_sid: jamDocData.host_sid, participants: updatedParticipants };
+        } else {
+            activeJamSessions[jam_id].participants = updatedParticipants;
+        }
 
         socket.emit('session_join_success', {
             jam_id: jam_id,
@@ -255,6 +276,8 @@ io.on('connection', (socket) => {
 
     // Handle playback state synchronization from host
     socket.on('sync_playback_state', async (data) => {
+        if (!db) return; // Exit if Firebase not initialized
+
         const { jam_id, current_track_index, current_playback_time, is_playing, playlist } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
 
@@ -275,8 +298,6 @@ io.on('connection', (socket) => {
                 playlist: playlist, // Host's playlist is the source of truth
                 playback_state: playbackState
             });
-            // Firestore listener on client side will handle updates, no need to broadcast from here.
-            // io.to(jam_id).emit('jam_state_update', { /* data as needed by clients */ });
             console.log(`Jam ${jam_id} playback state synced by host ${socket.id}.`);
         } catch (error) {
             console.error(`Error syncing playback state for jam ${jam_id}:`, error);
@@ -285,6 +306,8 @@ io.on('connection', (socket) => {
 
     // Handle adding a song to the jam session playlist (host only)
     socket.on('add_song_to_jam', async (data) => {
+        if (!db) return; // Exit if Firebase not initialized
+
         const { jam_id, song } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
 
@@ -296,7 +319,6 @@ io.on('connection', (socket) => {
         const updatedPlaylist = [...(jamDocData.playlist || []), song];
         try {
             await updateJamSessionInFirestore(jam_id, { playlist: updatedPlaylist });
-            // Firestore listener on client side will update client playlists
             console.log(`Song "${song.title}" added to jam ${jam_id} by host ${socket.id}.`);
         } catch (error) {
             console.error(`Error adding song to jam ${jam_id}:`, error);
@@ -305,6 +327,8 @@ io.on('connection', (socket) => {
 
     // Handle removing a song from the jam session playlist (host only)
     socket.on('remove_song_from_jam', async (data) => {
+        if (!db) return; // Exit if Firebase not initialized
+
         const { jam_id, song_id } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
 
@@ -323,7 +347,6 @@ io.on('connection', (socket) => {
 
         try {
             await updateJamSessionInFirestore(jam_id, { playlist: updatedPlaylist });
-            // Firestore listener on client side will update client playlists
             console.log(`Song with ID ${song_id} removed from jam ${jam_id} by host ${socket.id}.`);
         } catch (error) {
             console.error(`Error removing song from jam ${jam_id}:`, error);
@@ -332,6 +355,8 @@ io.on('connection', (socket) => {
 
     // Handle leaving a session
     socket.on('leave_session', async (data) => {
+        if (!db) return; // Exit if Firebase not initialized
+
         const { jam_id } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
 
@@ -353,14 +378,15 @@ io.on('connection', (socket) => {
             // Host is leaving
             console.log(`Host ${leftNickname} (${socket.id}) is leaving jam ${jam_id}.`);
             if (Object.keys(updatedParticipants).length > 0) {
-                // If there are other participants, assign a new host randomly
+                // If there are other participants, assign a new host randomly (first one in the list for simplicity)
                 const newHostSocketId = Object.keys(updatedParticipants)[0];
-                console.log(`Assigning new host for jam ${jam_id}: ${newHostSocketId}`);
+                console.log(`Assigning new host for jam ${jamId}: ${newHostSocketId}`);
                 await updateJamSessionInFirestore(jam_id, {
                     host_sid: newHostSocketId,
                     participants: updatedParticipants
                 });
-                io.to(jam_id).emit('update_participants', { jam_id: jam_id, participants: updatedParticipants }); // Inform remaining participants
+                // Notify remaining participants about the host change
+                io.to(jam_id).emit('update_participants', { jam_id: jam_id, participants: updatedParticipants });
                 io.to(jam_id).emit('session_ended', { message: `Host changed for Jam Session "${jamDocData.name}".` }); // Temporary message
             } else {
                 // No other participants, end the session
@@ -384,12 +410,12 @@ io.on('connection', (socket) => {
         delete socketIdToUserId[socket.id];
 
         // Check if the disconnected user was part of any active jam session
-        // Iterate through activeJamSessions to find if this socket was a participant or host
-        for (const jamId in activeJamSessions) {
-            const jamDocData = await getJamSessionFromFirestore(jamId);
-            if (!jamDocData || !jamDocData.is_active) {
-                continue; // Skip inactive sessions
-            }
+        // Iterate through activeJamSessions (which is just a quick lookup for host_sid)
+        // We'll rely on Firestore for the full list of participants for robustness
+        const jamSessionDocs = await db.collection('jam_sessions').where('is_active', '==', true).get();
+        for (const docSnapshot of jamSessionDocs.docs) {
+            const jamId = docSnapshot.id;
+            const jamDocData = docSnapshot.data();
 
             if (jamDocData.participants && jamDocData.participants[socket.id]) {
                 const updatedParticipants = { ...jamDocData.participants };
@@ -406,6 +432,7 @@ io.on('connection', (socket) => {
                         // Assign a new host if others are present
                         newHostSocketId = Object.keys(updatedParticipants)[0];
                         console.log(`Host ${leftNickname} (${socket.id}) disconnected from jam ${jamId}. New host: ${newHostSocketId}`);
+                        // Notify remaining participants about the host change
                         io.to(jamId).emit('session_ended', { message: `Host changed for Jam Session "${jamDocData.name}".` }); // Temporary message for all clients to re-sync
                     } else {
                         // No other participants, end the session
@@ -439,9 +466,10 @@ io.on('connection', (socket) => {
 
 
 // --- Error Handling (for Express) ---
+// This is a catch-all for unhandled Express errors.
 app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).send('Something broke!');
+    console.error("Express error caught:", err.stack);
+    res.status(500).send('An internal server error occurred.');
 });
 
 // --- Start Server ---
@@ -449,6 +477,6 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    console.log(`Access the application at: http://localhost:${PORT}`);
-    console.log("Remember to set VERCEL_URL in your Vercel project settings for shareable links to work correctly in production.");
+    console.log(`Access the application locally at: http://localhost:${PORT}`);
+    console.log("Remember to set FIREBASE_ADMIN_CREDENTIALS_JSON and VERCEL_URL in your Vercel project settings.");
 });
