@@ -8,7 +8,7 @@ require('dotenv').config();
 
 // --- Module Imports ---
 const express = require('express');
-const http = require('http'); // Required for Socket.IO
+const http = require('http'); // Required for Socket.IO (but server.listen() removed for Vercel export)
 const { Server } = require('socket.io');
 const cors = require('cors'); // For handling Cross-Origin Resource Sharing
 const path = require('path'); // For path manipulation
@@ -22,30 +22,31 @@ const admin = require('firebase-admin'); // Firebase Admin SDK
 // of your service account key file, stored as an environment variable.
 const firebaseAdminCredentials = process.env.FIREBASE_ADMIN_CREDENTIALS_JSON;
 
+let db = null;
+let auth = null;
+
 if (!firebaseAdminCredentials) {
-    console.error("FIREBASE_ADMIN_CREDENTIALS_JSON environment variable is not set. Firebase Admin SDK will not initialize.");
-    // In Vercel, this error will be visible in the deployment logs.
-    // For local development, you'd want to handle this more gracefully or exit.
-    // For deployment, Vercel might just show a 500 error if the app crashes on startup.
+    console.error("CRITICAL ERROR: FIREBASE_ADMIN_CREDENTIALS_JSON environment variable is NOT SET. Firebase Admin SDK will not be initialized. Jam features will NOT work.");
 } else {
     try {
         const serviceAccount = JSON.parse(firebaseAdminCredentials);
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
         });
-        console.log("Firebase Admin SDK initialized successfully.");
+        db = admin.firestore();
+        auth = admin.auth();
+        console.log("Firebase Admin SDK initialized SUCCESSFULLY. Firestore and Auth instances available.");
     } catch (e) {
-        console.error("Error parsing Firebase Admin credentials or initializing Firebase Admin SDK:", e);
-        // This is a critical error, likely leading to app crash.
+        console.error("CRITICAL ERROR: Error parsing FIREBASE_ADMIN_CREDENTIALS_JSON or initializing Firebase Admin SDK:", e.message, e.stack);
+        console.error("Please ensure the FIREBASE_ADMIN_CREDENTIALS_JSON environment variable contains a single-line, valid JSON string for your Firebase service account.");
     }
 }
 
-const db = firebaseAdminCredentials ? admin.firestore() : null; // Get Firestore instance, only if Firebase initialized
-const auth = firebaseAdminCredentials ? admin.auth() : null; // Get Auth instance, only if Firebase initialized
-
 // --- Express App Setup ---
 const app = express();
-const server = http.createServer(app); // Create an HTTP server for Express and Socket.IO
+// NOTE: For Vercel, we create the HTTP server for Socket.IO but don't call .listen()
+// Vercel wraps the exported Express app and handles the listening.
+const server = http.createServer(app); 
 
 // Configure CORS for Express (for API endpoints if accessed directly)
 app.use(cors({
@@ -59,19 +60,19 @@ app.use(express.json());
 
 // --- Socket.IO Setup ---
 // Configure CORS for Socket.IO specifically. This is important for client-server communication.
+// Attach Socket.IO to the http server
 const io = new Server(server, {
     cors: {
         origin: '*', // Allow all origins for Socket.IO connections
         methods: ['GET', 'POST'],
         credentials: true,
     },
-    // Allows Socket.IO to handle longer polling requests before timeout
     pingTimeout: 60000, 
 });
 
 // --- In-Memory State for Jam Sessions (Server-Side - ephemeral on serverless) ---
 // Note: On Vercel, these will reset with each cold start. Firestore is the primary source of truth.
-const activeJamSessions = {}; // Stores basic info, primarily for host_sid lookup: {jam_id: {host_sid: '...', participants: {sid: nickname}}}
+const activeJamSessions = {}; 
 
 // --- Serve Static Files ---
 // This line is crucial for serving all your frontend assets (index.html, manifest.json, css, js, icons etc.)
@@ -126,7 +127,7 @@ function generateShortUniqueId() {
 // Helper to get jam session data from Firestore
 async function getJamSessionFromFirestore(jamId) {
     if (!db) {
-        console.error("Firestore DB not initialized. Cannot fetch jam session.");
+        console.error("Firestore DB not initialized. Cannot fetch jam session data.");
         return null;
     }
     try {
@@ -145,7 +146,7 @@ async function getJamSessionFromFirestore(jamId) {
 // Helper to update jam session data in Firestore
 async function updateJamSessionInFirestore(jamId, data) {
     if (!db) {
-        console.error("Firestore DB not initialized. Cannot update jam session.");
+        console.error("Firestore DB not initialized. Cannot update jam session data.");
         return;
     }
     try {
@@ -175,7 +176,7 @@ io.on('connection', (socket) => {
     // Handle session creation
     socket.on('create_session', async (data) => {
         if (!db) {
-            socket.emit('join_failed', { message: "Server not configured for Firebase. Cannot create jam." });
+            socket.emit('join_failed', { message: "Server is not configured for Firebase. Cannot create jam session." });
             return;
         }
 
@@ -232,7 +233,7 @@ io.on('connection', (socket) => {
     // Handle joining an existing session
     socket.on('join_session', async (data) => {
         if (!db) {
-            socket.emit('join_failed', { message: "Server not configured for Firebase. Cannot join jam." });
+            socket.emit('join_failed', { message: "Server is not configured for Firebase. Cannot join jam session." });
             return;
         }
 
@@ -245,7 +246,7 @@ io.on('connection', (socket) => {
         }
 
         // Add new participant to the session
-        const updatedParticipants = { ...jamDocData.participants, [socket.id]: nickname };
+        const updatedParticipants = { ...jamDocData.participants };
         await updateJamSessionInFirestore(jam_id, { participants: updatedParticipants });
 
         socket.join(jam_id); // User joins the Socket.IO room
@@ -276,7 +277,10 @@ io.on('connection', (socket) => {
 
     // Handle playback state synchronization from host
     socket.on('sync_playback_state', async (data) => {
-        if (!db) return; // Exit if Firebase not initialized
+        if (!db) {
+            console.error("Firestore DB not initialized. Cannot sync playback state.");
+            return;
+        }
 
         const { jam_id, current_track_index, current_playback_time, is_playing, playlist } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
@@ -306,7 +310,10 @@ io.on('connection', (socket) => {
 
     // Handle adding a song to the jam session playlist (host only)
     socket.on('add_song_to_jam', async (data) => {
-        if (!db) return; // Exit if Firebase not initialized
+        if (!db) {
+            console.error("Firestore DB not initialized. Cannot add song to jam.");
+            return;
+        }
 
         const { jam_id, song } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
@@ -327,7 +334,10 @@ io.on('connection', (socket) => {
 
     // Handle removing a song from the jam session playlist (host only)
     socket.on('remove_song_from_jam', async (data) => {
-        if (!db) return; // Exit if Firebase not initialized
+        if (!db) {
+            console.error("Firestore DB not initialized. Cannot remove song from jam.");
+            return;
+        }
 
         const { jam_id, song_id } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
@@ -355,7 +365,10 @@ io.on('connection', (socket) => {
 
     // Handle leaving a session
     socket.on('leave_session', async (data) => {
-        if (!db) return; // Exit if Firebase not initialized
+        if (!db) {
+            console.error("Firestore DB not initialized. Cannot leave jam session.");
+            return;
+        }
 
         const { jam_id } = data;
         const jamDocData = await getJamSessionFromFirestore(jam_id);
@@ -409,9 +422,13 @@ io.on('connection', (socket) => {
         // Remove mapping
         delete socketIdToUserId[socket.id];
 
+        // Only proceed if db is initialized to avoid errors
+        if (!db) {
+            console.warn("Firestore DB not initialized. Skipping disconnect logic for jam sessions.");
+            return;
+        }
+
         // Check if the disconnected user was part of any active jam session
-        // Iterate through activeJamSessions (which is just a quick lookup for host_sid)
-        // We'll rely on Firestore for the full list of participants for robustness
         const jamSessionDocs = await db.collection('jam_sessions').where('is_active', '==', true).get();
         for (const docSnapshot of jamSessionDocs.docs) {
             const jamId = docSnapshot.id;
@@ -472,11 +489,15 @@ app.use((err, req, res, next) => {
     res.status(500).send('An internal server error occurred.');
 });
 
-// --- Start Server ---
-// Vercel automatically sets the PORT environment variable.
+// IMPORTANT for Vercel: Export the Express app
+// Vercel wraps this exported app and handles the server listening.
+module.exports = app;
+
+// The app.listen() call below is ONLY for local development.
+// It will be ignored by Vercel's serverless environment.
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Server running LOCALLLY on port ${PORT}`);
     console.log(`Access the application locally at: http://localhost:${PORT}`);
-    console.log("Remember to set FIREBASE_ADMIN_CREDENTIALS_JSON and VERCEL_URL in your Vercel project settings.");
+    console.log("For Vercel deployment, remember to set FIREBASE_ADMIN_CREDENTIALS_JSON and VERCEL_URL.");
 });
