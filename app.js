@@ -17,6 +17,10 @@ const admin = require('firebase-admin'); // Firebase Admin SDK
 const cookieParser = require('cookie-parser'); // For parsing cookies (crucial for sessions)
 const { getFirestore } = require('firebase-admin/firestore'); // Import getFirestore explicitly
 
+// --- Global Constants ---
+// Your application ID for Firestore paths. This should match the __app_id in the frontend.
+const APP_ID = process.env.APP_ID || 'default-app-id'; 
+
 // --- Firebase Admin SDK Initialization ---
 // Initialize Firebase Admin SDK using credentials from environment variable.
 // This is crucial for secure server-side interactions with Firestore.
@@ -238,16 +242,22 @@ function generateShortUniqueId() {
     return Math.random().toString(36).substring(2, 8).toUpperCase(); // 6 characters
 }
 
-// Helper to get jam session data from Firestore
-async function getJamSessionFromFirestore(jamId) {
+// Helper to get the Firestore collection reference for jam sessions
+function getJamSessionsCollectionRef() {
     if (!db) {
-        console.error("Firestore DB not initialized. Cannot fetch jam session data.");
+        console.error("Firestore DB not initialized.");
         return null;
     }
-    // Correct Firestore path for public data: artifacts/{appId}/public/data/jam_sessions
-    const appIdFromEnv = process.env.APP_ID || 'default-app-id'; // Use an env var or a hardcoded default
+    // Correct Firestore path for public data: artifacts/{APP_ID}/public/data/jam_sessions
+    return db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('jam_sessions');
+}
+
+// Helper to get jam session data from Firestore
+async function getJamSessionFromFirestore(jamId) {
+    const collectionRef = getJamSessionsCollectionRef();
+    if (!collectionRef) return null;
     try {
-        const docRef = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions').doc(jamId);
+        const docRef = collectionRef.doc(jamId);
         const doc = await docRef.get();
         if (doc.exists) {
             return doc.data();
@@ -261,14 +271,10 @@ async function getJamSessionFromFirestore(jamId) {
 
 // Helper to update jam session data in Firestore
 async function updateJamSessionInFirestore(jamId, data) {
-    if (!db) {
-        console.error("Firestore DB not initialized. Cannot update jam session data.");
-        return;
-    }
-    // Correct Firestore path for public data: artifacts/{appId}/public/data/jam_sessions
-    const appIdFromEnv = process.env.APP_ID || 'default-app-id'; // Use an env var or a hardcoded default
+    const collectionRef = getJamSessionsCollectionRef();
+    if (!collectionRef) return;
     try {
-        const docRef = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions').doc(jamId);
+        const docRef = collectionRef.doc(jamId);
         await docRef.set(data, { merge: true }); // Merge updates existing fields
         console.log(`Jam session ${jamId} updated in Firestore.`);
     } catch (error) {
@@ -385,7 +391,7 @@ io.on('connection', (socket) => {
             current_track_index: jamDocData.playback_state.current_track_index,
             current_playback_time: jamDocData.playback_state.current_playback_time,
             is_playing: jamDocData.playback_state.is_playing,
-            last_synced_at: jamDocData.playback_state.timestamp ? jamDocData.playback_state.timestamp.seconds : 0, // Convert Firestore timestamp to seconds
+            last_synced_at: playback_state.timestamp ? playback_state.timestamp.seconds : 0, // Convert Firestore timestamp to seconds
             participants: updatedParticipants,
             nickname_used: nickname
         });
@@ -549,8 +555,11 @@ io.on('connection', (socket) => {
         }
 
         // Check if the disconnected user was part of any active jam session
-        const appIdFromEnv = process.env.APP_ID || 'default-app-id';
-        const jamSessionsCollection = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions');
+        const jamSessionsCollection = getJamSessionsCollectionRef();
+        if (!jamSessionsCollection) {
+            console.warn("Firestore collection reference not available in disconnect handler.");
+            return;
+        }
         
         // Find jams where this socket was a participant or host
         // We query using `where` clauses to find documents where the socket ID exists in the participants map,
