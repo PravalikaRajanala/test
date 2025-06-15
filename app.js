@@ -162,10 +162,11 @@ app.post('/login', async (req, res) => {
         // Create session cookie
         const sessionCookie = await auth.createSessionCookie(idToken, SESSION_COOKIE_OPTIONS);
         res.cookie(SESSION_COOKIE_NAME, sessionCookie, SESSION_COOKIE_OPTIONS);
-        console.log(`Login successful for UID: ${decodedIdToken.uid}. Session cookie set.`);
-        return res.status(200).json({ status: 'success' });
+        console.log(`Login successful for UID: ${decodedIdToken.uid}. Session cookie set. Redirecting to index.`);
+        return res.redirect('/'); // Redirect to the main page after successful login
     } catch (error) {
         console.error("Error during login (ID token verification or session cookie creation):", error.message);
+        // If an error occurs, send a JSON response to the client
         return res.status(401).json({ error: "Unauthorized: Invalid ID token or session creation failed." });
     }
 });
@@ -199,8 +200,8 @@ app.post('/register', async (req, res) => {
         // Create and set session cookie
         const sessionCookie = await auth.createSessionCookie(id_token, SESSION_COOKIE_OPTIONS);
         res.cookie(SESSION_COOKIE_NAME, sessionCookie, SESSION_COOKIE_OPTIONS);
-        console.log(`Registration successful for UID: ${uid}. Profile saved to Firestore. Session cookie set.`);
-        return res.status(200).json({ status: 'success' });
+        console.log(`Registration successful for UID: ${uid}. Profile saved to Firestore. Session cookie set. Redirecting to index.`);
+        return res.redirect('/'); // Redirect to the main page after successful registration
     } catch (error) {
         console.error("Error during registration:", error.message);
         // Firebase Admin SDK errors related to token verification
@@ -363,7 +364,9 @@ io.on('connection', (socket) => {
         }
 
         // Add new participant to the session
-        const updatedParticipants = { ...jamDocData.participants, [socket.id]: nickname };
+        const updatedParticipants = { ...jamDocData.participants };
+        updatedParticipants[socket.id] = nickname; // Use direct assignment
+
         await updateJamSessionInFirestore(jam_id, { participants: updatedParticipants });
 
         socket.join(jam_id); // User joins the Socket.IO room
