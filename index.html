@@ -435,8 +435,8 @@
     
     <script type="module">
         // Import necessary modules
-        // Socket.IO Client Library
-        import { io } from "https://cdn.socket.io/4.0.0/socket.io.min.js";
+        // Socket.IO Client Library (now using esm.sh for ES Module compatibility)
+        import { io } from "https://esm.sh/socket.io-client";
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove, deleteDoc, collection, query, where, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         // Correct way to import v4 from uuid when using a CDN that provides ES Modules
