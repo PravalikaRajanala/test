@@ -435,9 +435,12 @@
     
     <script type="module">
         // Import necessary modules
+        // Socket.IO Client Library
+        import { io } from "https://cdn.socket.io/4.0.0/socket.io.min.js";
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove, deleteDoc, collection, query, where, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { v4 as uuidv4 } from "https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuid.min.js"; // Import uuidv4 specifically
+        // Correct way to import v4 from uuid when using a CDN that provides ES Modules
+        import { v4 as uuidv4 } from "https://esm.sh/uuid"; 
 
 
         // Your Firebase configuration (ensure this matches your project settings)
