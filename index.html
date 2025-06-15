@@ -277,10 +277,6 @@
             </button>
 
             <button id="forward-button" class="text-gray-700 hover:text-indigo-600 focus:outline-none transition-transform duration-200 ease-in-out active:scale-95">
-                <i class="fas fa-forward icon-size"></i>
-            </button>
-
-            <button id="next-button" class="text-gray-700 hover:text-indigo-600 focus:outline-none transition-transform duration-200 ease-in-out active:scale-95">
                 <i class="fas fa-forward-step icon-size"></i>
             </button>
         </div>
@@ -438,6 +434,7 @@
         // Socket.IO Client Library (now using esm.sh for ES Module compatibility)
         import { io } from "https://esm.sh/socket.io-client";
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js"; // Import getAuth and signInAnonymously
         import { getFirestore, doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove, deleteDoc, collection, query, where, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         // Correct way to import v4 from uuid when using a CDN that provides ES Modules
         import { v4 as uuidv4 } from "https://esm.sh/uuid"; 
@@ -474,6 +471,8 @@
         
         let app;
         let db;
+        let auth; // Firebase Auth instance
+        let isFirebaseReady = false; // Flag to indicate Firebase Auth is ready
 
         let currentJamId = null;
         let isHost = false;
@@ -768,9 +767,8 @@
         playPauseButton.addEventListener('click', () => {
             console.log("Play/Pause button clicked."); // Debug log
             const activePlaylist = currentJamId ? jamSessionPlaylist : playlist;
-            const currentTrack = activePlaylist[currentTrackIndex];
 
-            if (!currentTrack) {
+            if (!activePlaylist[currentTrackIndex]) {
                 showMessage("Playlist is empty. Add songs first!", 3000);
                 return;
             }
@@ -1126,7 +1124,7 @@
             hostedMp3SearchModal.classList.remove('hidden');
             hostedMp3SearchInput.value = '';
             hostedMp3SearchResults.innerHTML = '';
-            performHostedMp3Search(''); 
+            window.performHostedMp3Search(''); // Call globally exposed function
         }
 
         function closeHostedMp3SearchModal() { 
@@ -1181,6 +1179,7 @@
             if (db && jamIdToJoin) {
                 try {
                     console.log(`Attempting to fetch jam details for ID: ${jamIdToJoin}.`); // Debug log
+                    // Updated Firestore path to collection 'jam_sessions' directly under 'artifacts/appId/public/data/'
                     const jamDoc = await getDoc(doc(db, `artifacts/${appId}/public/data/jam_sessions`, jamIdToJoin));
                     if (jamDoc.exists && jamDoc.data().is_active) {
                         joinJamNameDisplay.textContent = `Joining: ${jamDoc.data().name || jamNamePlaceholder}`;
@@ -1208,6 +1207,12 @@
         window.closeManagePlaylistModal = closeManagePlaylistModal;
         window.closeCreateJamModal = closeCreateJamModal;
         window.closeJoinJamModal = closeJoinJamModal;
+        // Expose performHostedMp3Search to the global scope
+        window.performHostedMp3Search = async (query) => {
+            console.log(`Global performHostedMp3Search called for query: "${query}"`);
+            const results = await searchHostedMp3s(query);
+            renderSearchResults(results, hostedMp3SearchResults);
+        };
 
 
         // --- Add Song Functionality ---
@@ -1386,6 +1391,7 @@
                 return;
             }
 
+            // Updated Firestore path to collection 'jam_sessions' directly under 'artifacts/appId/public/data/'
             const jamRef = doc(db, `artifacts/${appId}/public/data/jam_sessions`, jamId);
 
             unsubscribeJamListener = onSnapshot(jamRef, (docSnapshot) => {
@@ -1645,7 +1651,8 @@
 
         leaveJamSessionButton.addEventListener('click', () => {
             console.log("Leave Jam Session button clicked."); // Debug log
-            if (confirm("Are you sure you want to leave the Jam Session?")) {
+            // Replaced window.confirm with custom modal prompt for better UX in Canvas
+            showConfirmModal("Are you sure you want to leave the Jam Session?", async () => {
                 if (currentJamId && userId) {
                     console.log("Emitting 'leave_session' to backend."); // Debug log
                     socket.emit('leave_session', { userId: userId, jam_id: currentJamId });
@@ -1666,7 +1673,7 @@
                     window.history.pushState({}, '', `/`); 
                     showMessage("You have left the jam session.");
                 }
-            }
+            });
         });
 
         managePlaylistButton.addEventListener('click', () => {
@@ -1677,16 +1684,14 @@
         performHostedMp3SearchButton.addEventListener('click', async () => {
             console.log("Perform Hosted MP3 Search button clicked."); // Debug log
             const query = hostedMp3SearchInput.value.trim();
-            const results = await searchHostedMp3s(query);
-            renderSearchResults(results, hostedMp3SearchResults); 
+            window.performHostedMp3Search(query); 
         });
 
         hostedMp3SearchInput.addEventListener('keypress', async (event) => {
             if (event.key === 'Enter') {
                 console.log("Hosted MP3 Search input - Enter key pressed."); // Debug log
                 const query = hostedMp3SearchInput.value.trim();
-                const results = await searchHostedMp3s(query);
-                renderSearchResults(results, hostedMp3SearchResults);
+                window.performHostedMp3Search(query);
             }
         });
 
@@ -1700,11 +1705,15 @@
             showMessage("Preparing random song pool from hosted MP3s...", 0); 
             showLoading();
             try {
+                // Ensure this fetch path is correct relative to your deployment, or an absolute URL
                 const response = await fetch(`${FLASK_BACKEND_URL}/hosted_songs_manifest.json`); 
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
                 const data = await response.json();
                 hideLoading();
 
-                if (response.ok && data.length > 0) {
+                if (data.length > 0) {
                     fullHostedSongsList = data.map(item => ({
                         id: item.id || uuidv4(), 
                         title: item.title,
@@ -1716,17 +1725,14 @@
                     }));
                     console.log(`Loaded ${fullHostedSongsList.length} songs for random playback.`);
                     showMessage(`Prepared ${fullHostedSongsList.length} hosted songs for random playback.`, 3000);
-                } else if (response.ok && data.length === 0) {
-                    showMessage("No hosted MP3s found in the manifest for random playback.", 5000);
-                    fullHostedSongsList = [];
                 } else {
-                    showMessage(`Error preparing random hosted MP3s: ${data.error || 'Unknown error'}`, 5000);
+                    showMessage("No hosted MP3s found in the manifest for random playback.", 5000);
                     fullHostedSongsList = [];
                 }
             } catch (error) {
                 hideLoading();
                 console.error("Network error fetching hosted songs manifest:", error); // Debug log
-                showMessage(`Network error: ${error.message}. Cannot prepare random songs.`, 6000);
+                showMessage(`Error loading hosted songs: ${error.message}. Cannot prepare random songs. Ensure hosted_songs_manifest.json exists and is accessible.`, 6000);
                 fullHostedSongsList = [];
             }
         }
@@ -1783,13 +1789,16 @@
             console.log('Connected to Socket.IO server with ID:', socket.id); // Debug log
             socket.io.opts.query = { userId: userId, nickname: myNickname };
             
-            if (currentJamId) {
+            // Only try to rejoin if Firebase is ready and we were in a jam before
+            if (isFirebaseReady && currentJamId) {
                 console.log("Attempting to rejoin previous jam session."); // Debug log
                 socket.emit('rejoin_session', { jam_id: currentJamId, userId: userId, nickname: myNickname });
                 showMessage("Reconnecting to jam session...", 2000);
-            } else {
+            } else if (isFirebaseReady) {
+                // If Firebase is ready but not in a jam, proceed with normal initial load
                 handleInitialLoadAndJamJoin();
             }
+            // If Firebase is not ready, handleInitialLoadAndJamJoin will be called after Firebase init
         });
 
         socket.on('disconnect', () => {
@@ -1911,6 +1920,40 @@
             }
         });
 
+        // --- Custom Confirmation Modal (replaces native confirm()) ---
+        function showConfirmModal(message, onConfirm) {
+            const modalOverlay = document.createElement('div');
+            modalOverlay.classList.add('modal-overlay');
+            modalOverlay.style.zIndex = 3001; // Higher z-index than other modals
+
+            const modalContent = document.createElement('div');
+            modalContent.classList.add('modal-content', 'text-center');
+
+            modalContent.innerHTML = `
+                <h3 class="text-xl font-bold text-gray-800 mb-4">Confirmation</h3>
+                <p class="text-gray-700 mb-6">${message}</p>
+                <div class="flex justify-center space-x-4">
+                    <button id="confirm-yes-btn" class="px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors duration-200">Yes</button>
+                    <button id="confirm-no-btn" class="px-5 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 transition-colors duration-200">No</button>
+                </div>
+            `;
+            
+            modalOverlay.appendChild(modalContent);
+            document.body.appendChild(modalOverlay);
+
+            const confirmYesBtn = modalContent.querySelector('#confirm-yes-btn');
+            const confirmNoBtn = modalContent.querySelector('#confirm-no-btn');
+
+            confirmYesBtn.addEventListener('click', () => {
+                onConfirm();
+                modalOverlay.remove();
+            });
+
+            confirmNoBtn.addEventListener('click', () => {
+                modalOverlay.remove();
+            });
+        }
+
 
         // --- Initial Load Logic ---
         async function handleInitialLoadAndJamJoin() {
@@ -1957,19 +2000,43 @@
             if (Object.keys(firebaseConfig).length === 0) {
                 console.error("Firebase config is empty. Firestore will not be initialized.");
                 showMessage("Firebase configuration missing. Jam features may not work. Please ensure it's configured.", 6000);
-                db = null;
+                db = null; // Ensure db is null if config is missing
+                isFirebaseReady = false;
             } else {
                 try {
                     app = initializeApp(firebaseConfig);
                     db = getFirestore(app);
+                    auth = getAuth(app); // Get Auth instance
                     console.log("Client-side Firebase (Firestore) initialized successfully."); // Debug log
+
+                    // Attempt to sign in anonymously using __initial_auth_token from Canvas
+                    // If not in Canvas, this will fall back to normal anonymous sign-in
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                         await signInWithCustomToken(auth, __initial_auth_token);
+                         console.log("Signed in with custom token (Canvas environment).");
+                    } else {
+                         await signInAnonymously(auth);
+                         console.log("Signed in anonymously (outside Canvas environment or no custom token).");
+                    }
+                    isFirebaseReady = true; // Mark Firebase as ready
+
                 } catch (error) {
-                    console.error("Error during Firebase client-side initialization:", error);
+                    console.error("Error during Firebase client-side initialization or sign-in:", error);
                     showMessage(`Client-side Firebase initialization failed: ${error.message}. Jam features may not work.`, 6000);
                     db = null;
+                    auth = null;
+                    isFirebaseReady = false;
                 }
             }
-            await handleInitialLoadAndJamJoin();
+            // Only call initial load and jam join after Firebase is attempted to be ready
+            // The socket 'connect' event handler also checks `isFirebaseReady`
+            if (isFirebaseReady) {
+                await handleInitialLoadAndJamJoin();
+            } else {
+                // If Firebase init failed, we still want the UI to load, just without jam features.
+                // handleInitialLoadAndJamJoin already handles disabling buttons if db is null.
+                await handleInitialLoadAndJamJoin();
+            }
         });
     </script>
 </body>
