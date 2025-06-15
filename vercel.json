@@ -2,22 +2,31 @@
   "version": 2,
   "builds": [
     {
-      "src": "app.js",
-      "use": "@vercel/node"
+      "src": "app.py",
+      "use": "@vercel/python@2.0.0"
     }
   ],
+  "functions": {
+    "app.py": {
+      "runtime": "python3.10",
+      "maxDuration": 300
+    }
+  },
   "routes": [
-    { "src": "/login", "dest": "login.html" },
-    { "src": "/register", "dest": "register.html" },
-    { "src": "/logout", "dest": "app.js" },
-    { "src": "/search_hosted_mp3s", "dest": "app.js" },
-    { "src": "/socket.io/", "dest": "app.js" },
-    { "src": "/hosted_songs_manifest.json", "dest": "hosted_songs_manifest.json" },
-    { "src": "/(.*)", "dest": "app.js" }
+    {
+      "src": "/socket.io/",
+      "dest": "app.py",
+      "headers": {
+        "Access-Control-Allow-Origin": "*"
+      }
+    },
+    {
+      "src": "/(.*)",
+      "dest": "app.py"
+    }
   ],
   "env": {
-    "FIREBASE_ADMIN_CREDENTIALS_JSON": "firebase_admin_credentials_json",
-    "VERCEL_URL": "vercel_url",
-    "APP_ID": "tunejam-app"
+    "FLASK_SECRET_KEY": "FLASK_SECRET_KEY",
+    "FIREBASE_ADMIN_CREDENTIALS_JSON": "FIREBASE_ADMIN_CREDENTIALS_JSON"
   }
 }
