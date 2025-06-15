@@ -14,27 +14,16 @@ const cors = require('cors'); // For handling Cross-Origin Resource Sharing
 const path = require('path'); // For path manipulation
 const fs = require('fs'); // For reading file system (e.g., manifest.json)
 const admin = require('firebase-admin'); // Firebase Admin SDK
-const cookieParser = require('cookie-parser'); // For parsing cookies (crucial for sessions)
-const { getFirestore, FieldValue } = require('firebase-admin/firestore'); // Import getFirestore and FieldValue explicitly
-const { getAuth } = require('firebase-admin/auth'); // Import getAuth explicitly
-
-// --- Global Constants ---
-// Your application ID for Firestore paths. This should match the __app_id in the frontend.
-// Ensure APP_ID is set as an environment variable in Vercel.
-const APP_ID = process.env.APP_ID || 'default-app-id';
+const cookieParser = require('cookie-parser'); // For parsing cookies
+const { getFirestore } = require('firebase-admin/firestore'); // Import getFirestore explicitly
 
 // --- Firebase Admin SDK Initialization ---
-// Initialize Firebase Admin SDK using credentials from environment variable.
-// This is crucial for secure server-side interactions with Firestore.
-// The FIREBASE_ADMIN_CREDENTIALS_JSON should be the entire JSON content
-// of your service account key file, stored as an environment variable.
 const firebaseAdminCredentials = process.env.FIREBASE_ADMIN_CREDENTIALS_JSON;
-
 let db = null;
 let auth = null;
 
 if (!firebaseAdminCredentials) {
-    console.error("CRITICAL ERROR: FIREBASE_ADMIN_CREDENTIALS_JSON environment variable is NOT SET. Firebase Admin SDK will not be initialized. Jam features and server-side authentication will NOT work.");
+    console.error("CRITICAL ERROR: FIREBASE_ADMIN_CREDENTIALS_JSON environment variable is NOT SET. Firebase Admin SDK will not be initialized. Jam features will NOT work.");
 } else {
     try {
         const serviceAccount = JSON.parse(firebaseAdminCredentials);
@@ -42,20 +31,17 @@ if (!firebaseAdminCredentials) {
             credential: admin.credential.cert(serviceAccount)
         });
         db = getFirestore(); // Initialize Firestore
-        auth = getAuth(); // Initialize Auth
+        auth = admin.auth(); // Initialize Auth
         console.log("Firebase Admin SDK initialized SUCCESSFULLY. Firestore and Auth instances available.");
     } catch (e) {
         console.error("CRITICAL ERROR: Error parsing FIREBASE_ADMIN_CREDENTIALS_JSON or initializing Firebase Admin SDK:", e.message, e.stack);
         console.error("Please ensure the FIREBASE_ADMIN_CREDENTIALS_JSON environment variable contains a single-line, valid JSON string for your Firebase service account.");
-        // Set db and auth to null to indicate failure and prevent further crashes
-        db = null;
-        auth = null;
     }
 }
 
 // --- Express App Setup ---
 const app = express();
-const server = http.createServer(app); // Create an HTTP server for Express and Socket.IO
+const server = http.createServer(app);
 
 // Configure CORS for Express
 app.use(cors({
@@ -81,16 +67,13 @@ const SESSION_COOKIE_OPTIONS = {
 // --- Authentication Middleware ---
 /**
  * Middleware to verify Firebase session cookie and authenticate requests.
- * This is now *optional* for the root route, allowing unauthenticated access.
- * It will still be used for protected routes if applied.
  */
 async function authenticateSession(req, res, next) {
     const sessionCookie = req.cookies[SESSION_COOKIE_NAME] || '';
 
-    // If no session cookie, user is unauthenticated, proceed.
-    // req.user will be undefined, which is handled by client-side logic for anonymous users.
-    if (!sessionCookie || !auth) {
-        return next();
+    if (!sessionCookie) {
+        console.log("No session cookie found, redirecting to login.");
+        return res.redirect('/login');
     }
 
     try {
@@ -100,36 +83,33 @@ async function authenticateSession(req, res, next) {
         next();
     } catch (error) {
         console.warn("Session cookie verification failed:", error.code, error.message);
-        // Session cookie is invalid, revoked, or expired. Clear it and proceed as unauthenticated.
+        // Session cookie is invalid, revoked, or expired. Clear it and redirect.
         res.clearCookie(SESSION_COOKIE_NAME);
-        next(); // Proceed to allow access to main page, but user will be treated as anonymous
+        return res.redirect('/login');
     }
 }
 
 // --- Socket.IO Setup ---
 const io = new Server(server, {
     cors: {
-        origin: '*', // Allow all origins for Socket.IO connections
+        origin: '*',
         methods: ['GET', 'POST'],
         credentials: true,
     },
-    pingTimeout: 60000, // Allows Socket.IO to handle longer polling requests before timeout
+    pingTimeout: 60000,
 });
 
 // --- In-Memory State for Jam Sessions (Server-Side - ephemeral on serverless) ---
-// Note: On Vercel, these will reset with each cold start. Firestore is the primary source of truth.
-const activeJamSessions = {}; // Stores basic info, primarily for host_sid lookup: {jam_id: {host_sid: '...', participants: {sid: nickname}}}
+// Note: This 'activeJamSessions' object is primarily for quick lookup of participant nicknames
+// and host_sid on a per-server instance basis. The true source of truth is Firestore.
+const activeJamSessions = {};
 
 // --- Serve Static Files ---
-// This line is crucial for serving all your frontend assets (index.html, manifest.json, css, js, icons etc.)
-// from the root directory. It should be placed BEFORE any specific API routes or the root route,
-// so that Express serves static files first if they match.
 app.use(express.static(path.join(__dirname)));
 
-// Basic root route - Now accessible without forced authentication.
-// The `authenticateSession` middleware is still applied to populate `req.user` if a cookie exists,
-// but it will no longer redirect to login if no cookie is found.
+// Basic root route - PROTECTED
 app.get('/', authenticateSession, (req, res) => {
+    // If the user is authenticated, serve the main app (index.html)
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
@@ -141,6 +121,11 @@ app.get('/login', (req, res) => {
 // Route for register page - Publicly accessible
 app.get('/register', (req, res) => {
     res.sendFile(path.join(__dirname, 'register.html'));
+});
+
+// Dashboard route - Redirects to main app if authenticated
+app.get('/dashboard', authenticateSession, (req, res) => {
+    res.redirect('/'); // Redirect to the main app after successful login/registration
 });
 
 // Load the hosted songs manifest once on startup for search functionality
@@ -174,11 +159,10 @@ app.post('/login', async (req, res) => {
         // Create session cookie
         const sessionCookie = await auth.createSessionCookie(idToken, SESSION_COOKIE_OPTIONS);
         res.cookie(SESSION_COOKIE_NAME, sessionCookie, SESSION_COOKIE_OPTIONS);
-        console.log(`Login successful for UID: ${decodedIdToken.uid}. Session cookie set. Redirecting to index.`);
-        return res.redirect('/'); // Redirect to the main page after successful login
+        console.log(`Login successful for UID: ${decodedIdToken.uid}. Session cookie set.`);
+        return res.status(200).json({ status: 'success' });
     } catch (error) {
         console.error("Error during login (ID token verification or session cookie creation):", error.message);
-        // If an error occurs, send a JSON response to the client
         return res.status(401).json({ error: "Unauthorized: Invalid ID token or session creation failed." });
     }
 });
@@ -205,14 +189,14 @@ app.post('/register', async (req, res) => {
             favorite_artist: favorite_artist || null,
             favorite_genre: favorite_genre || null,
             experience_level: experience_level || null,
-            createdAt: FieldValue.serverTimestamp()
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true }); // Use merge to update existing if user somehow pre-exists
 
         // Create and set session cookie
         const sessionCookie = await auth.createSessionCookie(id_token, SESSION_COOKIE_OPTIONS);
         res.cookie(SESSION_COOKIE_NAME, sessionCookie, SESSION_COOKIE_OPTIONS);
-        console.log(`Registration successful for UID: ${uid}. Profile saved to Firestore. Session cookie set. Redirecting to index.`);
-        return res.redirect('/'); // Redirect to the main page after successful registration
+        console.log(`Registration successful for UID: ${uid}. Profile saved to Firestore. Session cookie set.`);
+        return res.status(200).json({ status: 'success' });
     } catch (error) {
         console.error("Error during registration:", error.message);
         // Firebase Admin SDK errors related to token verification
@@ -223,17 +207,15 @@ app.post('/register', async (req, res) => {
 // Logout API endpoint
 app.get('/logout', (req, res) => {
     console.log("Logout endpoint hit. Clearing session cookie.");
-    res.clearCookie(SESSION_COOKIE_NAME); // Clear the session cookie
+    res.clearCookie(SESSION_COOKIE_NAME);
     res.redirect('/login'); // Redirect to login page after logout
 });
 
-// Endpoint for searching hosted MP3s
 app.get('/search_hosted_mp3s', (req, res) => {
     const query = req.query.query ? req.query.query.toLowerCase() : '';
     if (!query) {
         return res.json([]);
     }
-
     const results = hostedSongsManifest.filter(song =>
         song.title.toLowerCase().includes(query) ||
         (song.artist && song.artist.toLowerCase().includes(query))
@@ -244,27 +226,17 @@ app.get('/search_hosted_mp3s', (req, res) => {
 
 // --- Socket.IO Event Handlers ---
 
-// Utility to generate a short unique ID for jam sessions
 function generateShortUniqueId() {
-    return Math.random().toString(36).substring(2, 8).toUpperCase(); // 6 characters
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// Helper to get the Firestore collection reference for jam sessions
-function getJamSessionsCollectionRef() {
+async function getJamSessionFromFirestore(jamId) {
     if (!db) {
-        console.error("Firestore DB not initialized.");
+        console.error("Firestore DB not initialized. Cannot fetch jam session data.");
         return null;
     }
-    // Correct Firestore path for public data: artifacts/{APP_ID}/public/data/jam_sessions
-    return db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('jam_sessions');
-}
-
-// Helper to get jam session data from Firestore
-async function getJamSessionFromFirestore(jamId) {
-    const collectionRef = getJamSessionsCollectionRef();
-    if (!collectionRef) return null;
     try {
-        const docRef = collectionRef.doc(jamId);
+        const docRef = db.collection('jam_sessions').doc(jamId);
         const doc = await docRef.get();
         if (doc.exists) {
             return doc.data();
@@ -276,27 +248,25 @@ async function getJamSessionFromFirestore(jamId) {
     }
 }
 
-// Helper to update jam session data in Firestore
 async function updateJamSessionInFirestore(jamId, data) {
-    const collectionRef = getJamSessionsCollectionRef();
-    if (!collectionRef) return;
+    if (!db) {
+        console.error("Firestore DB not initialized. Cannot update jam session data.");
+        return;
+    }
     try {
-        const docRef = collectionRef.doc(jamId);
-        await docRef.set(data, { merge: true }); // Merge updates existing fields
+        const docRef = db.collection('jam_sessions').doc(jamId);
+        await docRef.set(data, { merge: true });
         console.log(`Jam session ${jamId} updated in Firestore.`);
     } catch (error) {
         console.error(`Error updating jam session ${jamId} in Firestore:`, error);
     }
 }
 
-// Map Socket ID to User ID (useful for tracking participants in a jam session)
+// Map Socket ID to User ID (for server-side tracking, though Firestore is primary)
 const socketIdToUserId = {};
 
 io.on('connection', (socket) => {
     console.log(`A user connected: ${socket.id}`);
-
-    // Get userId from the query parameter if available (set by client-side JS)
-    // If user is not logged in, client-side will send a generated UUID for userId
     const userId = socket.handshake.query.userId;
     if (userId) {
         socketIdToUserId[socket.id] = userId;
@@ -305,18 +275,18 @@ io.on('connection', (socket) => {
         console.warn(`Socket ${socket.id} connected without a User ID.`);
     }
 
-    // Handle session creation
     socket.on('create_session', async (data) => {
         if (!db) {
             socket.emit('join_failed', { message: "Server is not configured for Firebase. Cannot create jam session." });
             return;
         }
-
-        const { jam_name, nickname, userId: clientUserId } = data; // Get userId from client-side data
+        const { jam_name, nickname, userId } = data; // Ensure userId is received
+        if (!userId) {
+            socket.emit('join_failed', { message: "User not authenticated. Please log in." });
+            return;
+        }
 
         let jamId = generateShortUniqueId();
-
-        // Ensure generated ID is unique (unlikely to clash in short IDs, but good practice)
         let jamDoc = await getJamSessionFromFirestore(jamId);
         while (jamDoc && jamDoc.is_active) {
             jamId = generateShortUniqueId();
@@ -326,28 +296,36 @@ io.on('connection', (socket) => {
         const newJam = {
             id: jamId,
             name: jam_name || `Jam Session ${jamId}`,
-            host_sid: socket.id, // Store host's socket ID
-            host_user_id: clientUserId, // Use the userId passed from the client (can be Firebase UID or anonymous UUID)
-            participants: { [socket.id]: nickname }, // Store participants by socket ID
+            host_sid: socket.id,
+            host_user_id: userId, // Store host's Firebase User ID
+            participants: { [socket.id]: nickname }, // Map socket ID to nickname
             playlist: [],
             playback_state: {
                 current_track_index: 0,
                 current_playback_time: 0,
                 is_playing: false,
-                timestamp: FieldValue.serverTimestamp() // Firestore timestamp
+                timestamp: admin.firestore.FieldValue.serverTimestamp()
             },
-            is_active: true, // Mark session as active
-            created_at: FieldValue.serverTimestamp()
+            is_active: true,
+            created_at: admin.firestore.FieldValue.serverTimestamp()
         };
 
         try {
-            await updateJamSessionInFirestore(jamId, newJam);
-            socket.join(jamId); // Host joins the Socket.IO room
-            activeJamSessions[jamId] = { host_sid: socket.id, participants: { [socket.id]: nickname } }; // Update in-memory for quick lookup
+            // Store in Firestore within the artifacts/{appId}/public/data/jam_sessions path
+            // The `appId` must be dynamically accessed from the environment or a configuration
+            // For this backend, assuming 'default-app-id' as a placeholder or it needs to be injected.
+            // For Vercel/similar environments, you might pass APP_ID as an env var.
+            const appIdFromEnv = process.env.APP_ID || 'default-app-id'; // Use an env var or a hardcoded default
+            const docRef = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions').doc(jamId);
+            await docRef.set(newJam);
 
-            // VERCEL_URL is provided by Vercel for production deployments. For local, use localhost.
+            socket.join(jamId);
+            // Update in-memory for immediate use (ephemeral on serverless, primarily for `io.to` targeting)
+            activeJamSessions[jamId] = { host_sid: socket.id, participants: { [socket.id]: nickname } };
+            
+            // Generate shareable link using VERCEL_URL if available, otherwise localhost
             const shareableLink = `${process.env.VERCEL_URL || `http://localhost:${process.env.PORT || 3000}`}/?jam_id=${jamId}`;
-
+            
             socket.emit('session_created', {
                 jam_id: jamId,
                 jam_name: newJam.name,
@@ -363,29 +341,31 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle joining an existing session
     socket.on('join_session', async (data) => {
         if (!db) {
             socket.emit('join_failed', { message: "Server is not configured for Firebase. Cannot join jam session." });
             return;
         }
-
-        const { jam_id, nickname, userId: clientUserId } = data; // Get userId from client-side data
-        const jamDocData = await getJamSessionFromFirestore(jam_id);
-
-        if (!jamDocData || !jamDocData.is_active) {
-            socket.emit('join_failed', { message: `Jam session ${jam_id} not found or is inactive.` });
+        const { jam_id, nickname, userId } = data; // Ensure userId is received
+        if (!userId) {
+            socket.emit('join_failed', { message: "User not authenticated. Please log in." });
             return;
         }
 
-        // Add new participant to the session
-        const updatedParticipants = { ...jamDocData.participants };
-        updatedParticipants[socket.id] = nickname; // Use direct assignment
+        const appIdFromEnv = process.env.APP_ID || 'default-app-id';
+        const docRef = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions').doc(jam_id);
+        const jamDoc = await docRef.get();
 
-        await updateJamSessionInFirestore(jam_id, { participants: updatedParticipants });
+        if (!jamDoc.exists || !jamDoc.data().is_active) {
+            socket.emit('join_failed', { message: `Jam session ${jam_id} not found or is inactive.` });
+            return;
+        }
+        const jamDocData = jamDoc.data();
+        
+        const updatedParticipants = { ...jamDocData.participants, [socket.id]: nickname };
+        await docRef.update({ participants: updatedParticipants });
 
-        socket.join(jam_id); // User joins the Socket.IO room
-        // Update in-memory if this jam_id is tracked, else create entry (less critical for non-hosts)
+        socket.join(jam_id);
         if (!activeJamSessions[jam_id]) {
              activeJamSessions[jam_id] = { host_sid: jamDocData.host_sid, participants: updatedParticipants };
         } else {
@@ -400,41 +380,37 @@ io.on('connection', (socket) => {
             current_track_index: jamDocData.playback_state.current_track_index,
             current_playback_time: jamDocData.playback_state.current_playback_time,
             is_playing: jamDocData.playback_state.is_playing,
-            last_synced_at: jamDocData.playback_state.timestamp ? jamDocData.playback_state.timestamp.seconds : 0, // Convert Firestore timestamp to seconds
+            last_synced_at: jamDocData.playback_state.timestamp ? jamDocData.playback_state.timestamp.seconds : 0,
             participants: updatedParticipants,
             nickname_used: nickname
         });
-
-        // Inform all other participants in the room about the new participant
         io.to(jam_id).emit('update_participants', { jam_id: jam_id, participants: updatedParticipants });
         console.log(`${nickname} (${socket.id}) joined jam session ${jam_id}.`);
     });
 
-    // Handle playback state synchronization from host
     socket.on('sync_playback_state', async (data) => {
         if (!db) {
             console.error("Firestore DB not initialized. Cannot sync playback state.");
             return;
         }
-
         const { jam_id, current_track_index, current_playback_time, is_playing, playlist } = data;
-        const jamDocData = await getJamSessionFromFirestore(jam_id);
+        const appIdFromEnv = process.env.APP_ID || 'default-app-id';
+        const docRef = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions').doc(jam_id);
+        const jamDoc = await docRef.get();
 
-        if (!jamDocData || jamDocData.host_sid !== socket.id || !jamDocData.is_active) {
+        if (!jamDoc.exists || jamDoc.data().host_sid !== socket.id || !jamDoc.data().is_active) {
             console.warn(`Attempted sync from non-host or inactive session: ${socket.id} for jam ${jam_id}`);
-            return; // Only host can sync
+            return;
         }
-
         const playbackState = {
             current_track_index: current_track_index,
             current_playback_time: current_playback_time,
             is_playing: is_playing,
-            timestamp: FieldValue.serverTimestamp()
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
         };
-
         try {
-            await updateJamSessionInFirestore(jam_id, {
-                playlist: playlist, // Host's playlist is the source of truth
+            await docRef.update({
+                playlist: playlist,
                 playback_state: playbackState
             });
             console.log(`Jam ${jam_id} playback state synced by host ${socket.id}.`);
@@ -443,143 +419,123 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle adding a song to the jam session playlist (host only)
     socket.on('add_song_to_jam', async (data) => {
         if (!db) {
             console.error("Firestore DB not initialized. Cannot add song to jam.");
             return;
         }
-
         const { jam_id, song } = data;
-        const jamDocData = await getJamSessionFromFirestore(jam_id);
+        const appIdFromEnv = process.env.APP_ID || 'default-app-id';
+        const docRef = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions').doc(jam_id);
+        const jamDoc = await docRef.get();
 
-        if (!jamDocData || jamDocData.host_sid !== socket.id || !jamDocData.is_active) {
+        if (!jamDoc.exists || jamDoc.data().host_sid !== socket.id || !jamDoc.data().is_active) {
             console.warn(`Attempted to add song from non-host or inactive session: ${socket.id} for jam ${jam_id}`);
             return;
         }
-
-        const updatedPlaylist = [...(jamDocData.playlist || []), song];
+        const updatedPlaylist = [...(jamDoc.data().playlist || []), song];
         try {
-            await updateJamSessionInFirestore(jam_id, { playlist: updatedPlaylist });
+            await docRef.update({ playlist: updatedPlaylist });
             console.log(`Song "${song.title}" added to jam ${jam_id} by host ${socket.id}.`);
         } catch (error) {
             console.error(`Error adding song to jam ${jam_id}:`, error);
         }
     });
 
-    // Handle removing a song from the jam session playlist (host only)
     socket.on('remove_song_from_jam', async (data) => {
         if (!db) {
             console.error("Firestore DB not initialized. Cannot remove song from jam.");
             return;
         }
-
         const { jam_id, song_id } = data;
-        const jamDocData = await getJamSessionFromFirestore(jam_id);
+        const appIdFromEnv = process.env.APP_ID || 'default-app-id';
+        const docRef = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions').doc(jam_id);
+        const jamDoc = await docRef.get();
 
-        if (!jamDocData || jamDocData.host_sid !== socket.id || !jamDocData.is_active) {
+        if (!jamDoc.exists || jamDoc.data().host_sid !== socket.id || !jamDoc.data().is_active) {
             console.warn(`Attempted to remove song from non-host or inactive session: ${socket.id} for jam ${jam_id}`);
             return;
         }
-
-        const originalPlaylist = jamDocData.playlist || [];
+        const originalPlaylist = jamDoc.data().playlist || [];
         const updatedPlaylist = originalPlaylist.filter(song => song.id !== song_id);
 
         if (updatedPlaylist.length === originalPlaylist.length) {
             console.warn(`Song with ID ${song_id} not found in jam ${jam_id}'s playlist.`);
-            return; // Song not found, no update needed
+            return;
         }
-
         try {
-            await updateJamSessionInFirestore(jam_id, { playlist: updatedPlaylist });
+            await docRef.update({ playlist: updatedPlaylist });
             console.log(`Song with ID ${song_id} removed from jam ${jam_id} by host ${socket.id}.`);
         } catch (error) {
             console.error(`Error removing song from jam ${jam_id}:`, error);
         }
     });
 
-    // Handle leaving a session
     socket.on('leave_session', async (data) => {
         if (!db) {
             console.error("Firestore DB not initialized. Cannot leave jam session.");
             return;
         }
-
         const { jam_id } = data;
-        const jamDocData = await getJamSessionFromFirestore(jam_id);
+        const appIdFromEnv = process.env.APP_ID || 'default-app-id';
+        const docRef = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions').doc(jam_id);
+        const jamDoc = await docRef.get();
 
-        if (!jamDocData || !jamDocData.is_active) {
+        if (!jamDoc.exists || !jamDoc.data().is_active) {
             console.warn(`Attempted to leave inactive or non-existent jam: ${jam_id}`);
             return;
         }
-
-        // Remove participant from the session
+        const jamDocData = jamDoc.data();
         const updatedParticipants = { ...jamDocData.participants };
         const leftNickname = updatedParticipants[socket.id];
         delete updatedParticipants[socket.id];
 
-        socket.leave(jam_id); // User leaves the Socket.IO room
-
+        socket.leave(jam_id);
         let updatedIsActive = jamDocData.is_active;
 
         if (jamDocData.host_sid === socket.id) {
-            // Host is leaving
             console.log(`Host ${leftNickname} (${socket.id}) is leaving jam ${jam_id}.`);
             if (Object.keys(updatedParticipants).length > 0) {
-                // If there are other participants, assign a new host randomly (first one in the list for simplicity)
                 const newHostSocketId = Object.keys(updatedParticipants)[0];
                 console.log(`Assigning new host for jam ${jamId}: ${newHostSocketId}`);
-                await updateJamSessionInFirestore(jam_id, {
+                await docRef.update({
                     host_sid: newHostSocketId,
                     participants: updatedParticipants
                 });
-                // Notify remaining participants about the host change
                 io.to(jam_id).emit('update_participants', { jam_id: jam_id, participants: updatedParticipants });
-                io.to(jam_id).emit('session_ended', { message: `Host changed for Jam Session "${jamDocData.name}".` }); // Temporary message
+                io.to(jam_id).emit('session_ended', { message: `Host changed for Jam Session "${jamDocData.name}".` });
             } else {
-                // No other participants, end the session
                 updatedIsActive = false;
-                await updateJamSessionInFirestore(jam_id, { is_active: false, participants: updatedParticipants });
+                await docRef.update({ is_active: false, participants: updatedParticipants });
                 io.to(jam_id).emit('session_ended', { message: `Jam Session "${jamDocData.name}" has ended as host left.` });
-                delete activeJamSessions[jam_id]; // Remove from in-memory if host left and no one left
+                delete activeJamSessions[jam_id];
             }
         } else {
-            // Regular participant is leaving
-            await updateJamSessionInFirestore(jam_id, { participants: updatedParticipants });
-            io.to(jam_id).emit('update_participants', { jam_id: jam_id, participants: updatedParticipants }); // Inform remaining participants
+            await docRef.update({ participants: updatedParticipants });
+            io.to(jam_id).emit('update_participants', { jam_id: jam_id, participants: updatedParticipants });
             console.log(`${leftNickname} (${socket.id}) left jam session ${jam_id}.`);
         }
     });
 
-    // Handle client disconnect
     socket.on('disconnect', async () => {
         console.log(`User disconnected: ${socket.id}`);
-        // Remove mapping
         delete socketIdToUserId[socket.id];
 
-        // Only proceed if db is initialized to avoid errors
         if (!db) {
             console.warn("Firestore DB not initialized. Skipping disconnect logic for jam sessions.");
             return;
         }
-
-        // Check if the disconnected user was part of any active jam session
-        const jamSessionsCollection = getJamSessionsCollectionRef();
-        if (!jamSessionsCollection) {
-            console.warn("Firestore collection reference not available in disconnect handler.");
-            return;
-        }
-
-        // Find jams where this socket was a participant or host
-        // We query using `where` clauses to find documents where the socket ID exists in the participants map,
-        // or where it is the host_sid.
+        // Query for jams where this socket was a participant or host
+        const appIdFromEnv = process.env.APP_ID || 'default-app-id';
+        const jamSessionsCollection = db.collection('artifacts').doc(appIdFromEnv).collection('public').doc('data').collection('jam_sessions');
+        
+        // Find jams where the disconnected socket was a participant
         const participantQuery = jamSessionsCollection.where(`participants.${socket.id}`, '!=', null).where('is_active', '==', true);
         const hostQuery = jamSessionsCollection.where('host_sid', '==', socket.id).where('is_active', '==', true);
 
         const participantDocs = await participantQuery.get();
         const hostDocs = await hostQuery.get();
 
-        // Combine results and ensure unique jamIds
         const allRelevantDocs = [...participantDocs.docs, ...hostDocs.docs];
         const processedJamIds = new Set(); // To avoid processing the same jam twice
 
@@ -599,22 +555,18 @@ io.on('connection', (socket) => {
             let disconnectMessage = `${leftNickname} has left the session.`;
 
             if (jamDocData.host_sid === socket.id) {
-                // Disconnected user was the host
                 if (Object.keys(updatedParticipants).length > 0) {
-                    // Assign a new host if others are present (the first one in the updated list)
                     newHostSocketId = Object.keys(updatedParticipants)[0];
                     console.log(`Host ${leftNickname} (${socket.id}) disconnected from jam ${jamId}. New host: ${newHostSocketId}`);
-                    // Notify remaining participants about the host change
-                    io.to(jamId).emit('session_ended', { message: `Host changed for Jam Session "${jamDocData.name}".` }); // Temporary message for all clients to re-sync
+                    // Notify remaining participants about host change and potentially re-sync
+                    io.to(jamId).emit('session_ended', { message: `Host changed for Jam Session "${jamDocData.name}". New host: ${updatedParticipants[newHostSocketId] || 'Unknown'}.` });
                 } else {
-                    // No other participants, end the session
                     updatedIsActive = false;
                     console.log(`Host ${leftNickname} (${socket.id}) disconnected. Jam ${jamId} ended.`);
                     disconnectMessage = `Jam Session "${jamDocData.name}" has ended as host disconnected.`;
-                    delete activeJamSessions[jamId]; // Remove from in-memory
+                    delete activeJamSessions[jamId];
                 }
             } else {
-                // Disconnected user was a regular participant
                 console.log(`${leftNickname} (${socket.id}) disconnected from jam ${jamId}.`);
             }
 
@@ -635,9 +587,7 @@ io.on('connection', (socket) => {
     });
 });
 
-
 // --- Error Handling (for Express) ---
-// This is a catch-all for unhandled Express errors.
 app.use((err, req, res, next) => {
     console.error("Express error caught:", err.stack);
     res.status(500).send('An internal server error occurred.');
@@ -655,6 +605,6 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server running LOCALLLY on port ${PORT}`);
     console.log(`Access the application locally at: http://localhost:${PORT}`);
-    console.log("Remember to set FIREBASE_ADMIN_CREDENTIALS_JSON and VERCEL_URL.");
+    console.log("For Vercel deployment, remember to set FIREBASE_ADMIN_CREDENTIALS_JSON and VERCEL_URL.");
 });
 */
