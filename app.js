@@ -76,14 +76,16 @@ const SESSION_COOKIE_OPTIONS = {
 // --- Authentication Middleware ---
 /**
  * Middleware to verify Firebase session cookie and authenticate requests.
+ * This is now *optional* for the root route, allowing unauthenticated access.
+ * It will still be used for protected routes if applied.
  */
 async function authenticateSession(req, res, next) {
     const sessionCookie = req.cookies[SESSION_COOKIE_NAME] || '';
 
     if (!sessionCookie) {
-        console.log("No session cookie found for protected route, redirecting to login.");
-        // Use make_response and redirect to ensure proper handling in Vercel functions
-        return res.redirect('/login');
+        // If no session cookie, user is unauthenticated, proceed.
+        // req.user will be undefined, which is handled by client-side logic for anonymous users.
+        return next(); 
     }
 
     try {
@@ -93,9 +95,9 @@ async function authenticateSession(req, res, next) {
         next();
     } catch (error) {
         console.warn("Session cookie verification failed:", error.code, error.message);
-        // Session cookie is invalid, revoked, or expired. Clear it and redirect.
+        // Session cookie is invalid, revoked, or expired. Clear it and proceed as unauthenticated.
         res.clearCookie(SESSION_COOKIE_NAME);
-        return res.redirect('/login');
+        next(); // Proceed to allow access to main page, but user will be treated as anonymous
     }
 }
 
@@ -119,9 +121,10 @@ const activeJamSessions = {}; // Stores basic info, primarily for host_sid looku
 // so that Express serves static files first if they match.
 app.use(express.static(path.join(__dirname)));
 
-// Basic root route - PROTECTED by authentication middleware
+// Basic root route - Now accessible without forced authentication.
+// The `authenticateSession` middleware is still applied to populate `req.user` if a cookie exists,
+// but it will no longer redirect to login if no cookie is found.
 app.get('/', authenticateSession, (req, res) => {
-    // If the user is authenticated, serve the main app (index.html)
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
@@ -289,7 +292,8 @@ io.on('connection', (socket) => {
     console.log(`A user connected: ${socket.id}`);
 
     // Get userId from the query parameter if available (set by client-side JS)
-    const userId = socket.handshake.query.userId;
+    // If user is not logged in, client-side will send a generated UUID for userId
+    const userId = socket.handshake.query.userId; 
     if (userId) {
         socketIdToUserId[socket.id] = userId;
         console.log(`Socket ${socket.id} mapped to User ID: ${userId}`);
@@ -304,7 +308,8 @@ io.on('connection', (socket) => {
             return;
         }
 
-        const { jam_name, nickname } = data;
+        const { jam_name, nickname, userId: clientUserId } = data; // Get userId from client-side data
+        
         let jamId = generateShortUniqueId();
 
         // Ensure generated ID is unique (unlikely to clash in short IDs, but good practice)
@@ -318,7 +323,7 @@ io.on('connection', (socket) => {
             id: jamId,
             name: jam_name || `Jam Session ${jamId}`,
             host_sid: socket.id, // Store host's socket ID
-            host_user_id: userId, // Store host's Firebase User ID
+            host_user_id: clientUserId, // Use the userId passed from the client (can be Firebase UID or anonymous UUID)
             participants: { [socket.id]: nickname }, // Store participants by socket ID
             playlist: [],
             playback_state: {
@@ -361,7 +366,7 @@ io.on('connection', (socket) => {
             return;
         }
 
-        const { jam_id, nickname } = data;
+        const { jam_id, nickname, userId: clientUserId } = data; // Get userId from client-side data
         const jamDocData = await getJamSessionFromFirestore(jam_id);
 
         if (!jamDocData || !jamDocData.is_active) {
@@ -391,7 +396,7 @@ io.on('connection', (socket) => {
             current_track_index: jamDocData.playback_state.current_track_index,
             current_playback_time: jamDocData.playback_state.current_playback_time,
             is_playing: jamDocData.playback_state.is_playing,
-            last_synced_at: playback_state.timestamp ? playback_state.timestamp.seconds : 0, // Convert Firestore timestamp to seconds
+            last_synced_at: jamDocData.playback_state.timestamp ? jamDocData.playback_state.timestamp.seconds : 0, // Convert Firestore timestamp to seconds
             participants: updatedParticipants,
             nickname_used: nickname
         });
