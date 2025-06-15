@@ -7,15 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <!-- Socket.IO Client Library -->
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    <!-- UUID library for anonymous user IDs -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuid.min.js"></script>
-    <!-- Firebase SDK for client-side Firestore, only if needed for direct access -->
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"></script>
-
-
+    
     <style>
         /* Custom styles to enhance Tailwind's default behavior and provide specific overrides */
         body {
@@ -442,8 +434,10 @@
     </div>
     
     <script type="module">
+        // Import necessary modules
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove, deleteDoc, collection, query, where, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { v4 as uuidv4 } from "https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuid.min.js"; // Import uuidv4 specifically
 
 
         // Your Firebase configuration (ensure this matches your project settings)
